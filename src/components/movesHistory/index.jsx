@@ -1,19 +1,29 @@
 import React, { useState } from "react";
 import styled from "styled-components";
+import useSound from "use-sound";
+import chessMovesSfx from "../../sounds/chessMove.mp3";
+import chessCaptureSfx from "../../sounds/chessCapture.mp3";
 
-const MovesHistory = ({ chessBoard, setPosition }) => {
-  // console.log("chessBoard", chessBoard.history());
+import { doc, updateDoc, getDoc } from "firebase/firestore";
+import { db } from "../../firebase";
+import * as Chess from "chess.js";
+
+const MovesHistory = ({ chessBoard, setPosition, movesHistory }) => {
   const [undoMovesHistory, setUndoMovesHistory] = useState([]);
+
+  const [chessMoveSound] = useSound(chessMovesSfx);
+  const [chessCaptureSound] = useSound(chessCaptureSfx);
+
+  const gameRef = doc(db, "games", "gameDoc");
+
   const numberMovesColumn = (moves) => {
     try {
       const plysToCountMove =
         moves.length % 2 === 0 ? moves.length / 2 : Math.ceil(moves.length / 2);
-      console.log("plysToCountMove", plysToCountMove);
 
       const turnCount = Array.from(Array(plysToCountMove).keys())(
         (num) => num + 1
       );
-      console.log("turnCount", turnCount);
 
       return turnCount.map((turn, i) => (
         <p key={i} style={{ color: "#bababa", fontSize: 20 }}>
@@ -47,23 +57,42 @@ const MovesHistory = ({ chessBoard, setPosition }) => {
     return oddMove;
   };
 
-  const undoStep = () => {
-    const lastMove = chessBoard.undo();
+  const undoStep = async () => {
+    const gameSnap = await getDoc(gameRef);
+    const interChessBoard = new Chess();
+    interChessBoard.load_pgn(gameSnap.data().pgn);
 
+    const lastMove = interChessBoard.undo();
     if (lastMove === null) return;
-    setUndoMovesHistory([...undoMovesHistory, lastMove]);
-    setPosition(chessBoard.fen());
+
+    await updateDoc(gameRef, {
+      undoMovesHistory: [...gameSnap.data().undoMovesHistory, lastMove],
+      currentPosition: interChessBoard.fen(),
+      pgn: interChessBoard.pgn(),
+      gameHistory: interChessBoard.history(),
+    });
+
+    lastMove.flags === "c" || lastMove.flags === "e"
+      ? chessCaptureSound()
+      : chessMoveSound();
   };
 
-  const redoStep = () => {
-    const tempUndoMoveHistory = [...undoMovesHistory];
+  const redoStep = async () => {
+    const gameSnap = await getDoc(gameRef);
+    const interChessBoard = new Chess();
+    interChessBoard.load_pgn(gameSnap.data().pgn);
+    const tempUndoMoveHistory = [...gameSnap.data().undoMovesHistory];
     if (tempUndoMoveHistory.length === 0) return;
-
     const { flags, from, to } = tempUndoMoveHistory.pop();
+    interChessBoard.move({ from, to });
+    flags === "c" || flags === "e" ? chessCaptureSound() : chessMoveSound();
 
-    chessBoard.move({ from, to });
-    setPosition(chessBoard.fen());
-    setUndoMovesHistory(tempUndoMoveHistory);
+    await updateDoc(gameRef, {
+      undoMovesHistory: tempUndoMoveHistory,
+      currentPosition: interChessBoard.fen(),
+      pgn: interChessBoard.pgn(),
+      gameHistory: interChessBoard.history(),
+    });
   };
 
   return (
@@ -77,7 +106,7 @@ const MovesHistory = ({ chessBoard, setPosition }) => {
             height: "100",
           }}
         >
-          {numberMovesColumn(chessBoard.history())}
+          {numberMovesColumn(movesHistory)}
         </div>
 
         <div
@@ -86,10 +115,10 @@ const MovesHistory = ({ chessBoard, setPosition }) => {
             marginLeft: 10,
           }}
         >
-          {evenMovesColumn(chessBoard.history())}
+          {evenMovesColumn(movesHistory)}
         </div>
 
-        <div style={{ flex: 2 }}>{oddMovesColumn(chessBoard.history())}</div>
+        <div style={{ flex: 2 }}>{oddMovesColumn(movesHistory)}</div>
       </MovesContainer>
       <ActionButtonsContainer>
         <ActionButton onClick={() => undoStep()}>👈</ActionButton>
